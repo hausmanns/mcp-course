@@ -180,13 +180,32 @@ async def get_recent_actions_events(limit: int = 10) -> str:
     Args:
         limit: Maximum number of events to return (default: 10)
     """
-    # TODO: Implement this function
-    # 1. Check if EVENTS_FILE exists
-    # 2. Read the JSON file
-    # 3. Return the most recent events (up to limit)
-    # 4. Return empty list if file doesn't exist
-    
-    return json.dumps({"message": "TODO: Implement get_recent_actions_events"})
+    try:
+        # Check if EVENTS_FILE exists
+        if not EVENTS_FILE.exists():
+            return json.dumps({"events": [], "message": "No events file found"})
+        
+        # Read the JSON file
+        with open(EVENTS_FILE, 'r') as f:
+            events = json.load(f)
+        
+        # Return the most recent events (up to limit)
+        # Events are typically stored with most recent first, but let's ensure proper ordering
+        if isinstance(events, list):
+            recent_events = events[:limit]
+        else:
+            recent_events = []
+        
+        return json.dumps({
+            "events": recent_events,
+            "total_events": len(events) if isinstance(events, list) else 0,
+            "showing": len(recent_events)
+        }, indent=2)
+        
+    except json.JSONDecodeError as e:
+        return json.dumps({"error": f"Invalid JSON in events file: {str(e)}"})
+    except Exception as e:
+        return json.dumps({"error": f"Error reading events: {str(e)}"})
 
 
 @mcp.tool()
@@ -196,14 +215,62 @@ async def get_workflow_status(workflow_name: Optional[str] = None) -> str:
     Args:
         workflow_name: Optional specific workflow name to filter by
     """
-    # TODO: Implement this function
-    # 1. Read events from EVENTS_FILE
-    # 2. Filter events for workflow_run events
-    # 3. If workflow_name provided, filter by that name
-    # 4. Group by workflow and show latest status
-    # 5. Return formatted workflow status information
-    
-    return json.dumps({"message": "TODO: Implement get_workflow_status"})
+    try:
+        # Read events from EVENTS_FILE
+        if not EVENTS_FILE.exists():
+            return json.dumps({"workflows": {}, "message": "No events file found"})
+        
+        with open(EVENTS_FILE, 'r') as f:
+            events = json.load(f)
+        
+        if not isinstance(events, list):
+            return json.dumps({"workflows": {}, "message": "Invalid events format"})
+        
+        # Filter events for workflow_run events
+        workflow_events = []
+        for event in events:
+            if isinstance(event, dict) and event.get('type') == 'workflow_run':
+                workflow_events.append(event)
+        
+        # Group by workflow and show latest status
+        workflows = {}
+        for event in workflow_events:
+            workflow_data = event.get('payload', {}).get('workflow_run', {})
+            if not workflow_data:
+                continue
+                
+            wf_name = workflow_data.get('name', 'Unknown')
+            
+            # If workflow_name provided, filter by that name
+            if workflow_name and wf_name != workflow_name:
+                continue
+            
+            # Track the most recent event for each workflow
+            event_time = workflow_data.get('updated_at', workflow_data.get('created_at', ''))
+            
+            if wf_name not in workflows or event_time > workflows[wf_name].get('updated_at', ''):
+                workflows[wf_name] = {
+                    'name': wf_name,
+                    'status': workflow_data.get('status', 'unknown'),
+                    'conclusion': workflow_data.get('conclusion', None),
+                    'updated_at': event_time,
+                    'head_branch': workflow_data.get('head_branch', 'unknown'),
+                    'html_url': workflow_data.get('html_url', ''),
+                    'run_number': workflow_data.get('run_number', 0)
+                }
+        
+        result = {
+            "workflows": workflows,
+            "total_workflows": len(workflows),
+            "filtered_by": workflow_name if workflow_name else "all workflows"
+        }
+        
+        return json.dumps(result, indent=2)
+        
+    except json.JSONDecodeError as e:
+        return json.dumps({"error": f"Invalid JSON in events file: {str(e)}"})
+    except Exception as e:
+        return json.dumps({"error": f"Error reading workflow status: {str(e)}"})
 
 
 # ===== Module 2: MCP Prompts =====
@@ -211,40 +278,187 @@ async def get_workflow_status(workflow_name: Optional[str] = None) -> str:
 @mcp.prompt()
 async def analyze_ci_results():
     """Analyze recent CI/CD results and provide insights."""
-    # TODO: Implement this prompt
-    # Return a string with instructions for Claude to:
-    # 1. Use get_recent_actions_events() 
-    # 2. Use get_workflow_status()
-    # 3. Analyze results and provide insights
-    
-    return "TODO: Implement analyze_ci_results prompt"
+    return """You are a CI/CD analyst helping a development team understand their build and deployment pipeline health.
+
+Please follow these steps to analyze the recent CI/CD results:
+
+1. **Gather Recent Events**: Use get_recent_actions_events() to retrieve the latest GitHub Actions events (suggest using a limit of 20-30 events for comprehensive analysis).
+
+2. **Get Workflow Status**: Use get_workflow_status() to get the current status of all workflows.
+
+3. **Analyze the Data**: Look for patterns and insights including:
+   - Overall success/failure rate of workflows
+   - Most frequently failing workflows
+   - Recent trends in build times or failure patterns
+   - Any workflows that haven't run recently
+   - Branch-specific issues (main vs feature branches)
+
+4. **Provide Actionable Insights**: Based on your analysis, provide:
+   - Summary of current CI/CD health
+   - Identification of any problematic workflows or patterns
+   - Recommendations for improvements
+   - Priority issues that need immediate attention
+
+5. **Format Your Response**: Present your findings in a clear, structured format with:
+   - Executive summary (2-3 sentences)
+   - Key metrics and statistics
+   - Detailed findings with evidence
+   - Recommended actions with priority levels
+
+Focus on being data-driven and actionable in your analysis."""
 
 
 @mcp.prompt()
 async def create_deployment_summary():
     """Generate a deployment summary for team communication."""
-    # TODO: Implement this prompt
-    # Return a string that guides Claude to create a deployment summary
-    
-    return "TODO: Implement create_deployment_summary prompt"
+    return """You are a technical communication specialist helping create clear, concise deployment summaries for cross-functional teams.
+
+Please create a deployment summary by following these steps:
+
+1. **Gather Current Data**:
+   - Use get_recent_actions_events() to get recent deployment-related events
+   - Use get_workflow_status() to check the status of deployment workflows
+   - Use analyze_file_changes() to understand what code changes are being deployed
+
+2. **Create Team-Friendly Summary**: Generate a deployment summary that includes:
+   - **Deployment Status**: Current state (successful, in progress, failed, pending)
+   - **What's Being Deployed**: High-level description of features/fixes (non-technical language)
+   - **Timeline**: When the deployment started/completed or expected completion
+   - **Impact**: What users or systems are affected
+   - **Rollback Plan**: Brief mention of rollback status if needed
+
+3. **Tailor for Audience**: Make the summary accessible to:
+   - Product managers (focus on features and user impact)
+   - Engineering teams (include technical details)
+   - Support teams (highlight potential user-facing changes)
+   - Leadership (focus on business impact and risks)
+
+4. **Format Requirements**:
+   - Use clear, jargon-free language
+   - Include specific timestamps and version numbers
+   - Use emoji or formatting for quick visual scanning
+   - Keep the summary concise (under 200 words for executive summary)
+   - Include links to relevant dashboards or monitoring
+
+5. **Include Next Steps**: Clearly state what happens next and who is responsible for monitoring the deployment.
+
+Focus on clarity, accuracy, and actionability for non-technical stakeholders."""
 
 
 @mcp.prompt()
 async def generate_pr_status_report():
     """Generate a comprehensive PR status report including CI/CD results."""
-    # TODO: Implement this prompt
-    # Return a string that guides Claude to combine code changes with CI/CD status
-    
-    return "TODO: Implement generate_pr_status_report prompt"
+    return """You are a code review facilitator creating comprehensive pull request status reports that combine code analysis with CI/CD pipeline results.
+
+Please generate a complete PR status report by following these steps:
+
+1. **Analyze Code Changes**:
+   - Use analyze_file_changes() to get detailed diff information
+   - Identify the scope and type of changes (features, bugs, refactoring, etc.)
+   - Note any significant architectural changes or dependencies
+
+2. **Check CI/CD Pipeline Status**:
+   - Use get_workflow_status() to get current workflow states
+   - Use get_recent_actions_events() to see recent pipeline activity
+   - Identify any failing or pending checks
+
+3. **Generate Comprehensive Report** including:
+
+   **📋 PR Overview**:
+   - Summary of changes in 1-2 sentences
+   - Files modified, lines added/removed
+   - Type of change (feature, bugfix, etc.)
+
+   **🔍 Code Analysis**:
+   - Key changes and their purpose
+   - Potential impact areas
+   - Dependencies or breaking changes
+   - Code quality observations
+
+   **🚀 CI/CD Status**:
+   - All workflow statuses (✅ passed, ❌ failed, ⏳ pending)
+   - Any failing checks with details
+   - Test coverage changes
+   - Build/deployment status
+
+   **🎯 Review Readiness**:
+   - Is the PR ready for review? (all checks passing)
+   - Any blockers or concerns
+   - Recommended review focus areas
+   - Merge readiness assessment
+
+   **📈 Metrics & Stats**:
+   - Build times
+   - Test results summary
+   - Performance impact (if available)
+
+4. **Provide Actionable Recommendations**:
+   - Next steps for the author
+   - Specific areas for reviewers to focus on
+   - Any required fixes before merge
+
+Use clear formatting with sections, bullet points, and status indicators for easy scanning."""
 
 
 @mcp.prompt()
 async def troubleshoot_workflow_failure():
     """Help troubleshoot a failing GitHub Actions workflow."""
-    # TODO: Implement this prompt
-    # Return a string that guides Claude through troubleshooting steps
-    
-    return "TODO: Implement troubleshoot_workflow_failure prompt"
+    return """You are a DevOps engineer specializing in GitHub Actions troubleshooting. Help systematically diagnose and resolve workflow failures.
+
+Follow this structured troubleshooting approach:
+
+1. **Initial Assessment**:
+   - Use get_workflow_status() to identify which workflows are failing
+   - Use get_recent_actions_events() to get recent failure events
+   - Identify the specific workflow, job, and step that's failing
+
+2. **Gather Failure Context**:
+   - What type of failure is occurring? (build, test, deployment, etc.)
+   - When did the failure start occurring?
+   - Is this a new failure or recurring issue?
+   - What changed recently? (code, dependencies, configuration)
+
+3. **Systematic Diagnosis**:
+   
+   **🔍 Step 1 - Immediate Causes**:
+   - Check error messages and logs from the failing step
+   - Look for obvious issues (syntax errors, missing files, failed tests)
+   - Verify environment variables and secrets are properly configured
+
+   **🔍 Step 2 - Environmental Issues**:
+   - Check if the issue is runner-specific (OS, versions)
+   - Verify dependencies and package versions
+   - Look for timeout issues or resource constraints
+
+   **🔍 Step 3 - Recent Changes**:
+   - Use analyze_file_changes() to see what code changed recently
+   - Check if workflow files (.github/workflows/) were modified
+   - Identify any dependency updates or configuration changes
+
+   **🔍 Step 4 - Pattern Analysis**:
+   - Is this failing on specific branches?
+   - Does it fail consistently or intermittently?
+   - Are related workflows also failing?
+
+4. **Provide Solutions**:
+   
+   **🛠️ Immediate Actions** (quick fixes to try):
+   - Specific steps to resolve the identified issue
+   - Configuration changes needed
+   - Code fixes required
+
+   **🛠️ Prevention Measures** (avoid future occurrences):
+   - Workflow improvements
+   - Better error handling
+   - Enhanced monitoring
+
+5. **Create Action Plan**:
+   - Prioritized list of steps to resolve the issue
+   - Who should take each action
+   - How to verify the fix worked
+   - Monitoring to prevent recurrence
+
+Be methodical, provide specific actionable steps, and explain the reasoning behind each recommendation."""
 
 
 if __name__ == "__main__":
